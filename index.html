@@ -79,21 +79,59 @@
     .thought-text { font-size: 0.9rem; color: #ccc; line-height: 1.55; white-space: pre-wrap; }
     .thought-time { font-size: 0.72rem; color: #444; margin-top: 8px; }
     .empty { color: #333; font-size: 0.875rem; text-align: center; padding: 48px 0; }
+
+    .hidden { display: none !important; }
+    .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .link-btn {
+      background: none; color: #888; padding: 4px 0; font-size: 0.8rem; font-weight: 400;
+    }
+    .link-btn:hover:not(:disabled) { background: none; color: #ccc; }
+    .auth {
+      background: #161616; border: 1px solid #222; border-radius: 12px;
+      padding: 24px 20px; max-width: 400px;
+    }
+    .auth h2 { font-size: 1.05rem; color: #fff; font-weight: 600; margin-bottom: 4px; }
+    .auth p { font-size: 0.8rem; color: #666; margin-bottom: 18px; line-height: 1.5; }
+    .auth label { display: block; font-size: 0.75rem; color: #888; margin: 12px 0 6px; }
+    .auth input {
+      width: 100%; background: #0f0f0f; border: 1px solid #252525; border-radius: 8px;
+      color: #e5e5e5; font-size: 0.95rem; padding: 11px 14px; outline: none; font-family: inherit;
+    }
+    .auth input:focus { border-color: #6366f1; }
+    .auth .row { margin-top: 18px; flex-wrap: wrap; }
   </style>
 </head>
 <body>
 <div class="container">
 
-  <header>
-    <h1>🧠 My Open Brain</h1>
-    <div class="status">
-      <div class="dot" id="dot"></div>
-      <span id="statusText">Connecting...</span>
+  <header class="topbar">
+    <div>
+      <h1>🧠 My Open Brain</h1>
+      <div class="status">
+        <div class="dot" id="dot"></div>
+        <span id="statusText">Connecting...</span>
+      </div>
     </div>
+    <button class="link-btn hidden" id="signOutBtn" onclick="signOut()">Sign out</button>
   </header>
 
   <div class="banner" id="banner"></div>
 
+  <form class="auth hidden" id="authBox" onsubmit="event.preventDefault(); submitAuth()">
+    <h2 id="authTitle">Sign in</h2>
+    <p>Your brain is private. Only you can see what's in it.</p>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="email" required>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" minlength="8" required>
+    <div class="row">
+      <button type="submit" id="authBtn">Sign in</button>
+      <button type="button" class="link-btn" id="authToggle" onclick="toggleMode()">New here? Create account</button>
+    </div>
+    <div class="save-msg" id="authMsg" style="margin-top:12px"></div>
+  </form>
+
+  <div id="app" class="hidden">
   <div class="capture">
     <textarea id="input" placeholder="Capture anything — ideas, notes, things you learned, questions, plans..." rows="4"></textarea>
     <div class="row">
@@ -105,10 +143,14 @@
 
   <div class="section-label">Recent Thoughts</div>
   <div id="list"><div class="empty">Loading...</div></div>
+  </div>
 
 </div>
 <script>
   let db = null
+  let user = null
+  let mode = 'signin'
+  const $ = id => document.getElementById(id)
 
   function showBanner(html) {
     const b = document.getElementById('banner')
@@ -126,16 +168,78 @@
     }
     try {
       db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-      const { error } = await db.from('thoughts').select('id').limit(1)
-      if (error) throw error
-      document.getElementById('dot').className = 'dot connected'
-      document.getElementById('statusText').textContent = 'Connected to your database'
-      document.getElementById('saveBtn').disabled = false
-      await load()
+      db.auth.onAuthStateChange((_event, session) => {
+        // Defer so Supabase finishes its own auth work before we query
+        setTimeout(() => render(session), 0)
+      })
+      const { data } = await db.auth.getSession()
+      render(data.session)
     } catch (e) {
       showBanner('Could not connect to your database.<br><br>Error: <code>' + e.message + '</code><br><br>Check that your URL and anon key in <code>config.js</code> are correct and that you ran the migration SQL in Supabase.')
       document.getElementById('list').innerHTML = ''
     }
+  }
+
+  let shownUserId
+  async function render(session) {
+    const next = session ? session.user : null
+    if ((next && next.id) === shownUserId) return
+    shownUserId = next && next.id
+    user = next
+    $('banner').style.display = 'none'
+    if (!user) {
+      $('app').classList.add('hidden')
+      $('signOutBtn').classList.add('hidden')
+      $('authBox').classList.remove('hidden')
+      $('dot').className = 'dot'
+      $('statusText').textContent = 'Signed out'
+      return
+    }
+    $('authBox').classList.add('hidden')
+    $('app').classList.remove('hidden')
+    $('signOutBtn').classList.remove('hidden')
+    $('dot').className = 'dot connected'
+    $('statusText').textContent = 'Signed in as ' + user.email
+    $('saveBtn').disabled = false
+    await load()
+  }
+
+  function toggleMode() {
+    mode = mode === 'signin' ? 'signup' : 'signin'
+    const up = mode === 'signup'
+    $('authTitle').textContent = up ? 'Create your account' : 'Sign in'
+    $('authBtn').textContent = up ? 'Create account' : 'Sign in'
+    $('authToggle').textContent = up ? 'Have an account? Sign in' : 'New here? Create account'
+    $('password').autocomplete = up ? 'new-password' : 'current-password'
+    $('authMsg').textContent = ''
+  }
+
+  async function submitAuth() {
+    const email = $('email').value.trim()
+    const password = $('password').value
+    const btn = $('authBtn'), msg = $('authMsg')
+    btn.disabled = true
+    msg.textContent = ''
+    msg.className = 'save-msg'
+    try {
+      const { data, error } = mode === 'signup'
+        ? await db.auth.signUp({ email, password })
+        : await db.auth.signInWithPassword({ email, password })
+      if (error) throw error
+      if (mode === 'signup' && !data.session) {
+        msg.textContent = 'Account created. Check your email to confirm, then sign in.'
+        msg.className = 'save-msg ok'
+      }
+    } catch (e) {
+      msg.textContent = '✗ ' + e.message
+      msg.className = 'save-msg err'
+    } finally {
+      btn.disabled = false
+    }
+  }
+
+  async function signOut() {
+    await db.auth.signOut()
   }
 
   async function save() {
@@ -149,7 +253,7 @@
     msg.textContent = ''
     msg.className = 'save-msg'
     try {
-      const { error } = await db.from('thoughts').insert({ content: text })
+      const { error } = await db.from('thoughts').insert({ content: text, user_id: user.id })
       if (error) throw error
       input.value = ''
       msg.textContent = '✓ Saved'
